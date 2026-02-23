@@ -16,6 +16,7 @@ body { margin:0; background:var(--bg); color:var(--text); font-family:'Segoe UI'
 .expr-input { flex-grow:1; background:transparent; border:none; color:#fff; font-size:15px; outline:none; min-width:0; }
 .expr-delete { color:#888; cursor:pointer; padding:0 8px; font-weight:bold; }
 .expr-delete:hover { color:#ff4444; }
+.expr-result { padding:2px 0 2px 32px; color:#aaa; font-size:13px; font-weight:bold; }
 .slider-prompt { display:flex; align-items:center; padding:6px 0 0 32px; gap:6px; }
 .prompt-btn { background:transparent; color:var(--accent); border:1px solid #333; padding:2px 8px; border-radius:12px; font-size:11px; cursor:pointer; }
 .prompt-btn:hover { background:var(--accent); color:#fff; border-color:var(--accent); }
@@ -49,7 +50,7 @@ canvas { display:block; width:100%; height:100%; }
 <div id="sidebar">
     <div style="padding:15px; border-bottom:1px solid #333;">
         <h2 style="margin:0;">Grapher</h2>
-        <div style="font-size:12px;color:#888;">Version 0.2(a)</div>
+        <div style="font-size:12px;color:#888;">Version 0.2(b)</div>
     </div>
     <div id="expression-list"></div>
     <div id="toolbar">
@@ -158,6 +159,62 @@ function parseMath(str){
             fn:new Function('x','y','vars', `with(vars||{}){ return ${expr}; }`)
         };
     }catch(e){ return null; }
+}
+
+function getResult(text, currentVars) {
+    if (!text || !text.trim()) return null;
+    let clean = text.replace(/\s+/g,'').toLowerCase();
+    let parts = clean.split('=');
+    
+    let exprToEval = clean;
+    if (parts.length === 2) {
+        let lhs = parts[0];
+        if (!/^[a-z_][a-z0-9_]*$/.test(lhs)) return null;
+        exprToEval = parts[1];
+    } else if (parts.length > 2) {
+        return null;
+    }
+
+    let ids = findIdentifiers(exprToEval);
+    if (ids.includes('x') || ids.includes('y') || ids.includes('t')) return null;
+
+    try {
+        let prepared = prepareExpression(exprToEval);
+        let fn = new Function('vars', `with(vars||{}){ return ${prepared}; }`);
+        let val = fn(currentVars);
+        if (typeof val === 'number' && !isNaN(val) && isFinite(val)) return val;
+    } catch(e) {}
+    return null;
+}
+
+function refreshVars() {
+    expressions.forEach((expr) => {
+        if(expr.meta && expr.meta.type === 'assignment') {
+            try {
+                let val = expr.meta.fn(vars);
+                if(typeof val === 'number' && !isNaN(val) && isFinite(val)) {
+                    vars[expr.meta.varName] = val;
+                }
+            } catch(e) {}
+        }
+    });
+}
+
+function updateResults() {
+    expressions.forEach((expr, i) => {
+        let container = listEl.children[i];
+        if (!container) return;
+        let resEl = container.querySelector('.expr-result');
+        if (!resEl) return;
+        
+        let val = getResult(expr.text, vars);
+        if (val !== null) {
+            resEl.innerText = '= ' + (Number.isInteger(val) ? val : parseFloat(val.toFixed(4)));
+            resEl.style.display = 'block';
+        } else {
+            resEl.style.display = 'none';
+        }
+    });
 }
 
 function updateState() {
@@ -396,6 +453,7 @@ function renderList() {
                 <input class="expr-input" placeholder="Enter equation...">
                 <span class="expr-delete">×</span>
             </div>
+            <div class="expr-result" style="display:none;"></div>
             <div class="slider-prompt" style="display:none;"></div>
         `;
         listEl.appendChild(row);
@@ -440,6 +498,7 @@ function renderList() {
         }
     });
     renderSliders();
+    updateResults();
 }
 
 function renderSliders(){
@@ -494,6 +553,8 @@ function renderSliders(){
             vars[v] = newVal;
             label.innerText = `${v}: ${newVal.toFixed(2)}`;
             syncAssignment(v, newVal);
+            refreshVars();
+            updateResults();
             requestDraw();
         };
 
@@ -591,7 +652,11 @@ function animLoop(time) {
             needsDraw = true;
         }
     }
-    if (needsDraw) draw();
+    if (needsDraw) {
+        refreshVars();
+        updateResults();
+        draw();
+    }
     requestAnimationFrame(animLoop);
 }
 
