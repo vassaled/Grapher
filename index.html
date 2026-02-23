@@ -50,7 +50,7 @@ canvas { display:block; width:100%; height:100%; }
 <div id="sidebar">
     <div style="padding:15px; border-bottom:1px solid #333;">
         <h2 style="margin:0;">Grapher</h2>
-        <div style="font-size:12px;color:#888;">Version 0.2(b(0.1))</div>
+        <div style="font-size:12px;color:#888;">Version 0.2(b(0.2))</div>
     </div>
     <div id="expression-list"></div>
     <div id="toolbar">
@@ -118,6 +118,11 @@ function findIdentifiers(str){
     return Array.from(tokens);
 }
 
+function buildDestructure(ids) {
+    let structIds = ids.filter(id => !['x','y','t'].includes(id));
+    return structIds.length > 0 ? `const {${structIds.join(',')}} = vars || {}; ` : '';
+}
+
 function parseMath(str){
     try{
         if(!str || !str.trim()) return null;
@@ -133,7 +138,7 @@ function parseMath(str){
             if (!rhsIds.includes('x') && !rhsIds.includes('y') && !rhsIds.includes('t')) {
                 return {
                     type: 'assignment', raw: raw, varName: varName, ids: rhsIds,
-                    fn: new Function('vars', `with(vars||{}){ return ${rhs}; }`)
+                    fn: new Function('vars', `${buildDestructure(rhsIds)}return ${rhs};`)
                 };
             }
         }
@@ -144,19 +149,45 @@ function parseMath(str){
             let yPart = parts.find(p=>/y\s*=/.test(p.toLowerCase()));
             let xExpr = prepareExpression(xPart.split('=')[1]);
             let yExpr = prepareExpression(yPart.split('=')[1]);
+            let ids = findIdentifiers(xExpr + yExpr);
             return {
-                type:'parametric', raw:raw, ids:findIdentifiers(xExpr + yExpr),
-                fn:new Function('t','vars', `with(vars||{}){ return {x:(${xExpr}), y:(${yExpr})}; }`)
+                type:'parametric', raw:raw, ids:ids,
+                fn:new Function('t','vars', `${buildDestructure(ids)}return {x:(${xExpr}), y:(${yExpr})};`)
             };
+        }
+
+        let yMatch = clean.match(/^y=(.+)$/i);
+        if (yMatch) {
+            let rhs = prepareExpression(yMatch[1]);
+            let ids = findIdentifiers(rhs);
+            if (!ids.includes('y')) {
+                return {
+                    type: 'explicit-y', raw: raw, ids: ids,
+                    fn: new Function('x', 'vars', `${buildDestructure(ids)}return ${rhs};`)
+                };
+            }
+        }
+
+        let xMatch = clean.match(/^x=(.+)$/i);
+        if (xMatch) {
+            let rhs = prepareExpression(xMatch[1]);
+            let ids = findIdentifiers(rhs);
+            if (!ids.includes('x')) {
+                return {
+                    type: 'explicit-x', raw: raw, ids: ids,
+                    fn: new Function('y', 'vars', `${buildDestructure(ids)}return ${rhs};`)
+                };
+            }
         }
 
         let parts = clean.split('=');
         let lhs = parts.length > 1 ? prepareExpression(parts[0]) : 'y';
         let rhs = parts.length > 1 ? prepareExpression(parts.slice(1).join('=')) : prepareExpression(clean);
         let expr = `(${lhs}) - (${rhs})`;
+        let ids = findIdentifiers(expr);
         return {
-            type:'implicit', raw:raw, ids:findIdentifiers(expr),
-            fn:new Function('x','y','vars', `with(vars||{}){ return ${expr}; }`)
+            type:'implicit', raw:raw, ids:ids,
+            fn:new Function('x','y','vars', `${buildDestructure(ids)}return ${expr};`)
         };
     }catch(e){ return null; }
 }
@@ -165,7 +196,6 @@ function getResult(text, currentVars) {
     if (!text || !text.trim()) return null;
     let clean = text.replace(/\s+/g,'').toLowerCase();
     let parts = clean.split('=');
-    
     let exprToEval = clean;
     if (parts.length === 2) {
         let lhs = parts[0];
@@ -180,7 +210,7 @@ function getResult(text, currentVars) {
 
     try {
         let prepared = prepareExpression(exprToEval);
-        let fn = new Function('vars', `with(vars||{}){ return ${prepared}; }`);
+        let fn = new Function('vars', `${buildDestructure(ids)}return ${prepared};`);
         let val = fn(currentVars);
         if (typeof val === 'number' && !isNaN(val) && isFinite(val)) return val;
     } catch(e) {}
@@ -273,32 +303,67 @@ function draw(){
     ctx.fillStyle="#121212";
     ctx.fillRect(0,0,width,height);
     drawGrid();
-    const RESOLUTION = Math.max(2, Math.floor(8/(view.scale/40)));
 
     expressions.forEach(eq=>{
         if(!eq.meta || !eq.meta.fn || eq.meta.type === 'assignment') return;
         ctx.strokeStyle=eq.color;
         ctx.fillStyle=eq.color;
-        ctx.lineWidth = 1.2;
+        ctx.lineWidth = 2;
+
+        if(eq.meta.type==='explicit-y'){
+            ctx.beginPath();
+            let first = true;
+            for(let px = 0; px <= width; px += 2){
+                let mx = (px - width/2 - view.x)/view.scale;
+                try {
+                    let my = eq.meta.fn(mx, vars);
+                    if (typeof my !== 'number' || isNaN(my)) { first = true; continue; }
+                    let py = height/2 + view.y - my * view.scale;
+                    if (py < -5000 || py > height + 5000) { first = true; continue; }
+                    if(first){ ctx.moveTo(px,py); first = false; } else { ctx.lineTo(px,py); }
+                } catch(e) { first = true; }
+            }
+            ctx.stroke();
+            return;
+        }
+
+        if(eq.meta.type==='explicit-x'){
+            ctx.beginPath();
+            let first = true;
+            for(let py = 0; py <= height; py += 2){
+                let my = -((py - height/2 - view.y)/view.scale);
+                try {
+                    let mx = eq.meta.fn(my, vars);
+                    if (typeof mx !== 'number' || isNaN(mx)) { first = true; continue; }
+                    let px = mx * view.scale + width/2 + view.x;
+                    if (px < -5000 || px > width + 5000) { first = true; continue; }
+                    if(first){ ctx.moveTo(px,py); first = false; } else { ctx.lineTo(px,py); }
+                } catch(e) { first = true; }
+            }
+            ctx.stroke();
+            return;
+        }
 
         if(eq.meta.type==='parametric'){
             ctx.beginPath();
             let first=true;
-            for(let t=-10; t<=10; t+=0.01){
+            for(let t=-10; t<=10; t+=0.02){
                 try{
                     let p = eq.meta.fn(t,vars);
                     let px = p.x*view.scale + width/2 + view.x;
                     let py = height/2 + view.y - p.y*view.scale;
-                    if(first){ ctx.moveTo(px,py); first=false; } else ctx.lineTo(px,py);
+                    if(first){ ctx.moveTo(px,py); first=false; } else { ctx.lineTo(px,py); }
                 }catch(e){}
             }
             ctx.stroke();
             return;
         }
 
+        const RESOLUTION = Math.max(3, Math.floor(6/(view.scale/40)));
         const ids = (eq.meta.ids || []).map(id => id.toLowerCase());
         const primaryVar = ids.find(id => id !== 'y' && !explicitParams.has(id) && explicitAssignments[id] === undefined && id !== 't') || 'x';
 
+        ctx.lineWidth = 1.2;
         for(let screenX=0; screenX<width; screenX+=RESOLUTION){
             let mx = (screenX - width/2 - view.x)/view.scale;
             for(let screenY=0; screenY<height; screenY+=RESOLUTION){
@@ -327,6 +392,12 @@ function draw(){
     if (mousePos.x !== null) drawTooltip();
 }
 
+function resolveTooltipValue(eq, lx, ly, localVars) {
+    if (eq.meta.type === 'explicit-y') return ly - eq.meta.fn(lx, localVars);
+    if (eq.meta.type === 'explicit-x') return lx - eq.meta.fn(ly, localVars);
+    return eq.meta.fn(lx, ly, localVars);
+}
+
 function drawTooltip() {
     if (drag.active) return;
     const radius = 16;
@@ -339,6 +410,7 @@ function drawTooltip() {
         const primaryVar = ids.find(id => id !== 'y' && !explicitParams.has(id) && explicitAssignments[id] === undefined && id !== 't') || 'x';
         
         let localVars = {...vars};
+        let step = 2/view.scale;
         try {
             for(let sx = mousePos.x - radius; sx <= mousePos.x + radius; sx += 2) {
                 let lx = (sx - width/2 - view.x)/view.scale;
@@ -346,9 +418,9 @@ function drawTooltip() {
                 for(let sy = mousePos.y - radius; sy <= mousePos.y + radius; sy += 2) {
                     let ly = -((sy - height/2 - view.y)/view.scale);
                     
-                    let val = eq.meta.fn(lx, ly, localVars);
-                    let valR = eq.meta.fn(lx + 2/view.scale, ly, localVars);
-                    let valD = eq.meta.fn(lx, ly - 2/view.scale, localVars);
+                    let val = resolveTooltipValue(eq, lx, ly, localVars);
+                    let valR = resolveTooltipValue(eq, lx + step, ly, localVars);
+                    let valD = resolveTooltipValue(eq, lx, ly - step, localVars);
                     
                     if(Math.sign(val) !== Math.sign(valR) || Math.sign(val) !== Math.sign(valD)){
                         pts.push({x: sx, y: sy, mx: lx, my: ly});
