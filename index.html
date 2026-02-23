@@ -27,8 +27,12 @@ button.primary { background:var(--accent); border-color:var(--accent); width:100
 canvas { display:block; width:100%; height:100%; }
 #sliders { padding:12px; border-top:1px solid #333; }
 #sliders label { font-size:12px; display:block; margin-top:8px; }
-#sliders input { width:100%; }
+#sliders input[type="range"] { width:100%; margin-top: 6px; }
 .note { font-size:11px; color:#888; margin-top:6px; line-height:1.4; }
+
+.slider-header { display:flex; justify-content:space-between; align-items:center; margin-top:10px; }
+.play-btn { background:transparent; border:1px solid var(--accent); color:var(--accent); border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer; }
+.play-btn:hover { background:var(--accent); color:#fff; }
 
 #toggle-btn {
     position:absolute; left:0; top:50%; transform:translateY(-50%);
@@ -45,7 +49,7 @@ canvas { display:block; width:100%; height:100%; }
 <div id="sidebar">
     <div style="padding:15px; border-bottom:1px solid #333;">
         <h2 style="margin:0;">Grapher</h2>
-        <div style="font-size:12px;color:#888;">Version 0.2</div>
+        <div style="font-size:12px;color:#888;">Version 0.2(a)</div>
     </div>
     <div id="expression-list"></div>
     <div id="toolbar">
@@ -64,6 +68,7 @@ let expressions = [
     { text:"", color:COLORS[0], meta:null }
 ];
 let vars = {}; 
+let animState = {};
 
 const canvas = document.getElementById('graph');
 const ctx = canvas.getContext('2d', {alpha:false});
@@ -366,6 +371,20 @@ function drawGrid(){
     ctx.stroke();
 }
 
+function syncAssignment(v, newVal) {
+    if (assignmentSources[v] !== undefined) {
+        let idx = assignmentSources[v];
+        let valStr = Number.isInteger(newVal) ? newVal.toString() : newVal.toFixed(2);
+        expressions[idx].text = `${v}=${valStr}`;
+        expressions[idx].meta = parseMath(expressions[idx].text);
+        let container = listEl.children[idx];
+        if (container) {
+            let inputField = container.querySelector('.expr-input');
+            if (inputField) inputField.value = expressions[idx].text;
+        }
+    }
+}
+
 function renderList() {
     while(listEl.children.length > expressions.length) listEl.lastChild.remove();
     while(listEl.children.length < expressions.length) {
@@ -431,42 +450,56 @@ function renderSliders(){
     sliderVars = [...new Set(sliderVars)];
     
     if(sliderVars.length === 0) return;
+
+    sliderVars.forEach(v => {
+        if (!animState[v]) animState[v] = { playing: false, dir: 1, min: -10, max: 10, speed: 0.5 };
+    });
     
     let box=document.createElement('div');
     box.id='sliders';
     box.innerHTML = '<div class="note">Variables defined as parameters appear as sliders.</div>';
     
     sliderVars.forEach(v=>{
-        let label=document.createElement('label');
-        label.innerText=`${v}: ${vars[v]}`;
+        let container = document.createElement('div');
+        
+        let header = document.createElement('div');
+        header.className = 'slider-header';
+
+        let label = document.createElement('label');
+        label.id = 'label-' + v;
+        label.innerText = `${v}: ${typeof vars[v] === 'number' ? vars[v].toFixed(2) : vars[v]}`;
+        label.style.margin = '0';
+
+        let playBtn = document.createElement('button');
+        playBtn.className = 'play-btn';
+        playBtn.innerText = animState[v].playing ? 'Pause' : 'Play';
+        playBtn.onclick = () => {
+            animState[v].playing = !animState[v].playing;
+            playBtn.innerText = animState[v].playing ? 'Pause' : 'Play';
+        };
+
+        header.appendChild(label);
+        header.appendChild(playBtn);
         
         let input=document.createElement('input');
+        input.id = 'slider-' + v;
         input.type='range'; 
-        let currentVal = vars[v];
-        input.min = Math.min(-10, Math.floor(currentVal * 1.5));
-        input.max = Math.max(10, Math.ceil(currentVal * 1.5));
-        input.step=0.1; 
-        input.value=currentVal;
+        input.min = animState[v].min;
+        input.max = animState[v].max;
+        input.step=0.01; 
+        input.value=vars[v];
         
         input.oninput=()=>{
             let newVal = parseFloat(input.value);
             vars[v] = newVal;
-            label.innerText = `${v}: ${newVal}`;
-            
-            if (assignmentSources[v] !== undefined) {
-                let idx = assignmentSources[v];
-                expressions[idx].text = `${v}=${newVal}`;
-                expressions[idx].meta = parseMath(expressions[idx].text);
-                let container = listEl.children[idx];
-                if (container) {
-                    let inputField = container.querySelector('.expr-input');
-                    if (inputField) inputField.value = expressions[idx].text;
-                }
-            }
+            label.innerText = `${v}: ${newVal.toFixed(2)}`;
+            syncAssignment(v, newVal);
             requestDraw();
         };
-        box.appendChild(label);
-        box.appendChild(input);
+
+        container.appendChild(header);
+        container.appendChild(input);
+        box.appendChild(container);
     });
     document.getElementById('sidebar').appendChild(box);
 }
@@ -533,6 +566,36 @@ canvas.addEventListener('wheel',e=>{
     requestDraw();
 });
 
+let lastTime = performance.now();
+function animLoop(time) {
+    let dt = (time - lastTime) / 1000;
+    lastTime = time;
+    if (dt > 0.1) dt = 0.1;
+
+    let needsDraw = false;
+    for (let v in animState) {
+        let st = animState[v];
+        if (st.playing) {
+            let range = st.max - st.min;
+            vars[v] += (range * st.speed * dt) * st.dir;
+            
+            if (vars[v] >= st.max) { vars[v] = st.max; st.dir = -1; }
+            if (vars[v] <= st.min) { vars[v] = st.min; st.dir = 1; }
+
+            let slider = document.getElementById('slider-' + v);
+            if (slider) slider.value = vars[v];
+            let label = document.getElementById('label-' + v);
+            if (label) label.innerText = `${v}: ${vars[v].toFixed(2)}`;
+
+            syncAssignment(v, vars[v]);
+            needsDraw = true;
+        }
+    }
+    if (needsDraw) draw();
+    requestAnimationFrame(animLoop);
+}
+
+requestAnimationFrame(animLoop);
 fullUpdate();
 </script>
 </body>
