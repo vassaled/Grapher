@@ -50,7 +50,7 @@ canvas { display:block; width:100%; height:100%; }
 <div id="sidebar">
     <div style="padding:15px; border-bottom:1px solid #333;">
         <h2 style="margin:0;">Grapher</h2>
-        <div style="font-size:12px;color:#888;">Version 0.2(b)</div>
+        <div style="font-size:12px;color:#888;">Version 0.2(b(0.1))</div>
     </div>
     <div id="expression-list"></div>
     <div id="toolbar">
@@ -408,24 +408,95 @@ function drawTooltip() {
 }
 
 function drawGrid(){
-    ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath();
-    let startX=Math.floor((-width/2-view.x)/view.scale) - 1;
-    let endX=Math.ceil((width/2-view.x)/view.scale) + 1;
-    for(let i=startX;i<=endX;i++){
-        let px=i*view.scale+width/2+view.x;
-        ctx.moveTo(px,0); ctx.lineTo(px,height);
+    const targetSpacing = 80;
+    const targetUnits = targetSpacing / view.scale;
+    const mag = Math.pow(10, Math.floor(Math.log10(targetUnits)));
+    const norm = targetUnits / mag;
+    
+    let step = mag;
+    if (norm > 7.5) step = 10 * mag;
+    else if (norm > 3.5) step = 5 * mag;
+    else if (norm > 1.5) step = 2 * mag;
+
+    const minorStep = step / 5;
+    
+    ctx.strokeStyle = "#1a1a1a";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let startX = Math.floor((-width/2 - view.x)/view.scale / minorStep) * minorStep;
+    let endX = Math.ceil((width/2 - view.x)/view.scale / minorStep) * minorStep;
+    for(let i=startX; i<=endX; i+=minorStep){
+        let px = i * view.scale + width/2 + view.x;
+        ctx.moveTo(px, 0); ctx.lineTo(px, height);
     }
-    let startY=Math.floor((-height/2+view.y)/view.scale) - 1;
-    let endY=Math.ceil((height/2+view.y)/view.scale) + 1;
-    for(let i=startY;i<=endY;i++){
-        let py=height/2+view.y-i*view.scale;
-        ctx.moveTo(0,py); ctx.lineTo(width,py);
+    let startY = Math.floor((-height/2 + view.y)/view.scale / minorStep) * minorStep;
+    let endY = Math.ceil((height/2 + view.y)/view.scale / minorStep) * minorStep;
+    for(let i=startY; i<=endY; i+=minorStep){
+        let py = height/2 + view.y - i * view.scale;
+        ctx.moveTo(0, py); ctx.lineTo(width, py);
     }
     ctx.stroke();
-    ctx.strokeStyle="#888"; ctx.lineWidth=2; ctx.beginPath();
-    ctx.moveTo(width/2+view.x, 0); ctx.lineTo(width/2+view.x, height);
-    ctx.moveTo(0, height/2+view.y); ctx.lineTo(width, height/2+view.y);
+
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    startX = Math.floor((-width/2 - view.x)/view.scale / step) * step;
+    endX = Math.ceil((width/2 - view.x)/view.scale / step) * step;
+    for(let i=startX; i<=endX; i+=step){
+        let px = i * view.scale + width/2 + view.x;
+        ctx.moveTo(px, 0); ctx.lineTo(px, height);
+    }
+    startY = Math.floor((-height/2 + view.y)/view.scale / step) * step;
+    endY = Math.ceil((height/2 + view.y)/view.scale / step) * step;
+    for(let i=startY; i<=endY; i+=step){
+        let py = height/2 + view.y - i * view.scale;
+        ctx.moveTo(0, py); ctx.lineTo(width, py);
+    }
     ctx.stroke();
+
+    let originX = width/2 + view.x;
+    let originY = height/2 + view.y;
+    
+    ctx.strokeStyle = "#888";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (originX >= 0 && originX <= width) {
+        ctx.moveTo(originX, 0); ctx.lineTo(originX, height);
+    }
+    if (originY >= 0 && originY <= height) {
+        ctx.moveTo(0, originY); ctx.lineTo(width, originY);
+    }
+    ctx.stroke();
+
+    ctx.fillStyle = "#aaa";
+    ctx.font = "12px 'Segoe UI', monospace";
+    
+    const formatLabel = (val) => {
+        let res = parseFloat(val.toPrecision(12));
+        return res === 0 ? "" : res.toString();
+    };
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    let labelY = Math.max(15, Math.min(height - 20, originY + 5));
+    for(let i=startX; i<=endX; i+=step){
+        if (Math.abs(i) < step*0.01) continue;
+        let px = i * view.scale + width/2 + view.x;
+        ctx.fillText(formatLabel(i), px, labelY);
+    }
+
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    let labelX = Math.max(25, Math.min(width - 10, originX - 5));
+    for(let i=startY; i<=endY; i+=step){
+        if (Math.abs(i) < step*0.01) continue;
+        let py = height/2 + view.y - i * view.scale;
+        ctx.fillText(formatLabel(i), labelX, py);
+    }
+    
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    ctx.fillText("0", labelX, labelY);
 }
 
 function syncAssignment(v, newVal) {
